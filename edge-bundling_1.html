@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>d3-force-layout edge-bundling</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            background-color: #303243;
+        }
+
+        #canvas {
+            height: 100%;
+        }
+
+        #info {
+            position: absolute;
+            bottom: 2px;
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0.7;
+            font-size: 10px;
+            font-family: sans-serif;
+            pointer-events: none;
+            color: slategray;
+        }
+
+        #tooltip {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: none;
+            background: white;
+            opacity: 0.4;
+            color: black;
+            padding: 4px;
+            font-family: sans-serif;
+            pointer-events: none;
+            border-radius: 4px;
+        }
+
+    </style>
+    <script src="lib/d3.js"></script>
+    <script src="lib/d3-ForceEdgeBundling.js"></script>
+</head>
+<body>
+<div id="canvas"></div>
+<div id="tooltip"></div>
+<div id="info">
+    Mouse-wheel: zoom, Left-click: pan
+</div>
+<script>
+    (function () {
+
+        d3.json("network.json", function (err, data) {
+
+            if (err)
+                return;
+
+            // 数据处理 映射
+            function handleData(data) {
+                // 数据映射
+                let index_of_nodes = d3.map();
+                for (let i = 0; i !== data.nodes.length; ++i) {
+                    index_of_nodes.set(data.nodes[i].id, i);
+                }
+                data.links.forEach(function (item) {
+                    item.source = index_of_nodes.get(item.source);
+                    item.target = index_of_nodes.get(item.target);
+                });
+            }
+
+            handleData(data);
+
+            let graph = data;
+
+            // 返回随机颜色代码
+            function random_color() {
+                let letters = '0123456789ABCDEF'.split('');
+                let color = '#';
+                for (let i = 0; i < 6; i++) {
+                    color += letters[Math.floor(Math.random() * 16)];
+                }
+                return color;
+            }
+
+
+            function draw(opation) {
+                // 对象解构
+                let {data: group, container: dom, margin, width: Width, height: Height, tickNum} = opation;
+                let width = Width - margin.left - margin.right;
+                let height = Height - margin.top - margin.bottom;
+
+
+                let svg = d3.select(dom)
+                    .append("svg")
+                    .attr("width", Width)
+                    .attr("height", Height);
+
+                function zoomed() {
+                    svg_g.attr("transform", () => `translate(${d3.event.translate})scale(${d3.event.scale})`)
+
+                    /*g放大的时候其子节点不放大*/
+                    let scale = d3.event.scale;
+                    if (scale > 1) {
+                        nodes.attr({
+                            "r": d => Math.sqrt(scaleR(d.value.inDegree + d.value.outDegree)) / scale,
+                            "stroke-width": () => 1 / scale
+                        });
+                        links.style('stroke-width', () => 1 / scale);
+                        text.attr(
+                            'font-size',
+                            5 / scale
+                        );
+                    }
+                }
+
+                // 要先添加rect 再添加g
+                svg.append("rect")
+                    .attr("fill", "none")
+                    .attr("pointer-events", "all")
+                    .attr("width", Width)
+                    .attr("height", Height)
+                    .call(d3.behavior.zoom()
+                        .scaleExtent([1, 8])
+                        .on("zoom", zoomed));
+
+                let svg_g = svg
+                    .append("g")
+                    .attr("class", "container")
+                    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+
+                /*计算度*/
+                graph.nodes.forEach(function (d) {
+                    d.inDegree = 0;
+                    d.outDegree = 0;
+                });
+                graph.links.forEach(function (d) {
+                    graph.nodes[d.source].outDegree += 1;
+                    graph.nodes[d.target].inDegree += 1;
+                });
+
+
+                let force = d3.layout.force()
+                    .size([width, height])
+                    .nodes(graph.nodes)
+                    .links(graph.links)
+                    .start();
+
+
+                // 迭代200次
+                for (let i = 0, n = tickNum; i < n; ++i) {
+                    force.tick();
+                }
+
+
+                let nnode = {}, llink = [];
+                graph.nodes.forEach(node => {
+                    nnode[node.id] = {
+                        x: node.x,
+                        y: node.y,
+                        id: node.id,
+                        stroke: node.stroke,
+                        size: node.size,
+                        inDegree: node.inDegree,
+                        outDegree: node.outDegree,
+                        degree: node.inDegree + node.outDegree
+                    };
+                });
+                graph.links.forEach(link => {
+                    llink.push({"source": link.source.id, "target": link.target.id});
+                });
+
+                // 绑定
+                let fbundling = d3.ForceEdgeBundling().nodes(nnode).edges(llink);
+                let results = fbundling();
+                let d3line = d3.svg.line()
+                    .x(d => d.x)
+                    .y(d => d.y)
+                    .interpolate("linear");
+
+
+                // 加入路径(边)
+                let links = svg_g.append("g")
+                    .attr("class", "link_g")
+                    .selectAll(".path")
+                    .data(results)
+                    .enter()
+                    .append("path")
+                    .attr({
+                        "class": `path`,
+                        "d": d3line
+                    })
+                    .style({
+                        "stroke-width": 1,
+                        "stroke": "#ff2222",
+                        "fill": "none",
+                        'stroke-opacity': 0.8
+                    });
+
+                // 节点
+                let node_g = svg_g.append("g")
+                    .attr("class", "node_g");
+
+                let scaleR = d3.scale.linear()
+                    .domain(d3.extent(graph.nodes.map(node => node.inDegree + node.outDegree)))
+                    .range([25, 100]);
+
+
+                let nodes = node_g.selectAll('.node')
+                    .data(d3.entries(nnode))
+                    .enter()
+                    .append('circle')
+                    .attr({
+                        "class": "node",
+                        'fill': d => d.value.fill = random_color(),
+                        'cx': d => d.value.x,
+                        'cy': d => d.value.y,
+                        "stroke": d => d.value.stroke,
+                        "stroke-width": 1,
+                        "r": d => Math.sqrt(scaleR(d.value.degree)),
+                        "opacity": "0.5"
+                    })
+                    .on("mouseover", nodeMoveOver)
+                    .on("mouseout", nodeMoveOut)
+                    .call(d3.behavior.drag()
+                        .on('drag', function () {
+                                let x = d3.mouse(this)[0];
+                                let y = d3.mouse(this)[1];
+                                d3.select(this)
+                                    .attr('cx', x)
+                                    .attr('cy', y);
+
+                                let data = d3.select(this).data();
+                                if (!data[0].flag) {
+                                    node_g.append("circle")
+                                        .attr("cx", () => data[0].value.x)
+                                        .attr("cy", () => data[0].value.y)
+                                        .attr("r", () => data[0].value.size)
+                                        .style({
+                                            "stroke-width": 1,
+                                            "stroke": data[0].value.fill,
+                                            "fill": "none",
+                                            // 'stroke-opacity': 0.115,
+                                            "stroke-dasharray": "2 2"
+                                        });
+
+                                    node_g.append("line")
+                                        .attr("x1", () => data[0].value.x)
+                                        .attr("y1", () => data[0].value.y)
+                                        .attr("x2", x)
+                                        .attr("y2", y)
+                                        .attr("class", () => `link_${data[0].key}`)
+                                        .style({
+                                            "stroke-width": 1,
+                                            "stroke": "red",
+                                            "fill": "none",
+                                            'stroke-opacity': 0.5,
+                                            "stroke-dasharray": "2 2"
+                                        });
+                                    data[0].flag = true;
+                                }
+                                d3.select(`.link_${data[0].key}`)
+                                    .attr("x2", x)
+                                    .attr("y2", y)
+                            }
+                        ));
+
+
+                // 绘制文本
+                let text = node_g
+                    .selectAll(".text")
+                    .data(graph.nodes)
+                    .enter()
+                    .append("text")
+                    .attr({
+                        "text-anchor": "middle",
+                        "x": d => d.x,
+                        "y": d => d.y,
+                        "font-family": "sans-serif",
+                        "font-size": "5px",
+                        "fill": "#eee",
+                        "visibility": "hidden",
+                        "id": d => `text_${d.id}`
+                    })
+                    .style("pointer-events", "none")
+                    .text(d => d.id);
+
+
+                function nodeMoveOver(d) {
+                    d3.select(this).attr('opacity', "1");
+                    d3.select(`#text_${d.key}`).attr('visibility', 'visible');
+                    showTooltip(true, d);
+                }
+
+                function nodeMoveOut(d) {
+                    d3.select(this).attr('opacity', "0.5");
+                    d3.select(`#text_${d.key}`).attr('visibility', 'hidden');
+                    showTooltip(false, d);
+                }
+
+
+            }
+
+
+            // 配置参数
+            const defaultOptions = {
+                container: document.getElementById("canvas"),
+                margin: {
+                    top: 20,
+                    right: 20,
+                    bottom: 20,
+                    left: 20
+                },
+                data: graph,
+                width: window.innerWidth,
+                height: window.innerHeight,
+                tickNum: 200
+            };
+
+            draw(defaultOptions);
+
+            // 提示框
+            function showTooltip(display, d) {
+                console.log(d);
+                let tooltip = document.getElementById("tooltip"); // 提示框
+                if (display) {
+                    tooltip.style.display = "block";
+                    tooltip.innerHTML = `<span>入度:${d.value.inDegree}</span><br/>
+                    <span>出度:${d.value.outDegree}</span><br/>
+                    <span>节点:${d.value.id}</span>`;
+                    tooltip.zIndex = 1000;
+                    tooltip.style.left = event.offsetX + 'px';
+                    tooltip.style.top = event.offsetY + 21 + 'px';
+                } else {
+                    tooltip.style.display = "none";
+                }
+            }
+        });
+    })();
+</script>
+</body>
+</html>
